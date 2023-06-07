@@ -1,0 +1,61 @@
+
+parse_excel_file <- function(file_path) {
+
+  edge_df <- as.data.frame(read_excel(file_path,"edges"))
+  edge_df <- as.data.frame(apply(edge_df, 1:2, function(x) ifelse(is.na(x),"",x)))
+  
+  # Parse the data
+  edges <- data.frame(from = str_trim(edge_df[,2]), 
+                      causes = ifelse(str_trim(edge_df[,3])=="causes",1,0),
+                      to = str_trim(edge_df[,4]), 
+                      reason = str_trim(edge_df[,5]),
+                      uncertain = ifelse(str_trim(edge_df[,7])=="1",1,0), 
+                      desirability = ifelse(str_trim(edge_df[,8]) == "", 0, as.numeric(str_trim(edge_df[,8]))))
+  
+  # Remove duplicates
+  edges <- edges[!duplicated(edges), ]
+  
+  # Add inevitability column
+  edges$inevitability <- ifelse(edges$uncertain == 1, 0, 1)
+  
+  # Extract unique concepts
+  concepts <- unique(c(edges$from, edges$to))
+  
+  graph <- create_igraph_from_edges(edges)
+  
+  # Return list with edges and concepts
+  data <- list(edges = edges, concepts = concepts, graph = graph)
+
+  return(data)
+}
+
+get_node_to_node_subgraph <- function(start_nodes, end_node, g, community_type) {
+ 
+  result <- spread_activation(g, start_nodes, end_node, max_steps = 6) 
+  story_graph <- result$subgraph
+  
+  if (community_type == "none") {
+    print("done")
+    return (story_graph)
+  }
+  
+  if (community_type == "node") {
+    # Split into narratives by node
+    # Split into narratives by edge
+    set.seed(Sys.time())
+    story_graph <- add_communities_by_edge(story_graph, .5)
+    # Show communities by node
+    sub_stories_by_node_community <- subgraphs_by_node_community(story_graph)
+    sub_stories_by_node_community <- get_wider_sub_stories(sub_stories_by_node_community, story_graph,
+                                                           get_from = FALSE, get_to = FALSE) 
+    print("done")
+    return (sub_stories_by_node_community)
+  }
+  if (community_type == "edge") {
+    ### Show communities by edge
+    story_graph <- add_communities_by_edge(story_graph, .5)
+    sub_stories_by_edge_community <- subgraphs_by_edge_community(story_graph)
+    print(paste("done. created ", length(sub_stories_by_edge_community), " different communities"))
+    return (sub_stories_by_edge_community)
+  }
+}
