@@ -1,0 +1,325 @@
+library(shiny)
+library(shinyjqui)
+library(DiagrammeR)
+
+# Define UI for data upload app ----
+ui <- fluidPage(
+  
+  tags$head(
+    tags$style(
+      HTML("
+    #header {
+      background-color: #000080;
+      color: #FF4500;
+      padding: 10px;
+      font-size: 18px;
+      height: 50px;
+      line-height: 30px;  # Vertically center the text in the header
+    }
+    #tabs {
+      padding: 10px;
+      background-color: #007BFF;
+      color: #3c3c3c;
+    }
+    .shiny-input-container {
+      font-size: 12px;
+      margin-bottom: 10px;
+      color: #1E90FF;
+    }
+    .sidebar {
+      padding: 12px;
+      width: 20%;
+      float: left; 
+    }
+    #main {
+      padding: 12px;
+      background-color: #000080;  
+      color: #1E90FF;
+      width: 80%; 
+      float: right;
+    }
+    body {
+      background-color: #000080; 
+      font-family: 'Roboto', sans-serif;
+      font-size: 12px;
+      color: #1E90FF;
+    }
+    .nav-tabs > li > a {
+      background-color: #FFFFFF; 
+      color: #3c3c3c;
+    }
+    .nav-tabs > li.active > a,
+    .nav-tabs > li.active > a:hover,
+    .nav-tabs > li.active > a:focus {
+      color: #FF4500;
+      background-color: #FFFFFF;
+      font-weight: bold;
+    }
+    .btn {
+      border-radius: 20px;
+      border: none;
+      color: white;
+      background-color: #007BFF;
+      margin-right: 10px; 
+      margin-bottom: 10px;
+    }
+    .btn:hover {
+      background-color: #0056b3;
+      color: #FF4500;
+    }
+    .shiny-file-input-progress {
+      display: none;
+    }
+    .shiny-file-input {
+      display: inline-block;
+    }
+    #grviz {
+      padding: 20px;
+    }
+    ")
+    )
+  ),
+  
+  tags$div(id = "header",
+           tags$img(src = "path_to_your_logo.png", height = 30, width = 30, style = "float:left; padding-right: 10px"),
+           "Network Analysis"
+  ),
+  
+  sidebarLayout(
+    sidebarPanel(
+      width = 3,
+      tabsetPanel(
+        id = "tabs",
+        tabPanel("File Upload", 
+                 fileInput("file", "Choose Excel File", multiple = FALSE, accept = c(".xlx", ".xlsx")),
+                 actionButton("back_main_menu", "Back to Main Menu"),
+                 actionButton("show_metrics", "Show Graph Metrics"),
+                 uiOutput("file_parsed_ui"),
+                 uiOutput("file_download_ui")
+        ),
+        # Second Tab: Plot Preferences
+        tabPanel("Plot Preferences",
+         selectInput("select_volatile_nodes", "Select Volatile Nodes:", choices = list(), multiple = TRUE),
+         numericInput("aspect_ratio_across", "Aspect Ratio Across to height:", value = 1),
+         fluidRow(
+           column(6,
+                  checkboxInput("show_volatile_nodes", "Show Volatile Nodes:", value = FALSE),
+                  radioButtons("layout_algorithm", "Select Layout Algorithm:", c("fdp", "dot"), selected = "dot"),
+                  numericInput("scale", "Scale:", value = 0.1)
+           ),
+           column(6,
+                  numericInput("node_size", "Node Size:", value = 1),
+                  numericInput("resolution", "Resolution:", value = 4000),
+                  textInput("background_color", "Background Color (Hex):", value = "#FFFFFF"),
+                  textInput("node_color", "Node Color (Hex):", value = "#000000")
+           )
+        )
+        )
+      )
+      ),
+      mainPanel(
+        tableOutput("contents"),
+        tags$div(style = "padding:20px; background-color: #000080; color: #ffffff;", 
+                 jqui_resizable(grVizOutput("grviz"))
+        )
+      )
+    
+  )
+)
+  
+
+  
+
+
+
+# Define server logic to read selected file ----
+server <- function(input, output, session) {
+  
+  source("functions.R")
+  library(igraph)
+
+  global_data <- eventReactive(input$file, {
+    data <- parse_excel_file(input$file$datapath)
+    print("data parsed")
+    data
+  })
+  
+  #  output$contents <- renderTable({
+  #    global_data()$concepts  # access the value of global_df
+  #  })
+  
+  
+  observeEvent(global_data, {
+    output$file_parsed_ui <- renderUI({
+      tagList(
+        actionButton("menu_node_to_node", "Node to Node"),
+        actionButton("menu_ancestor_subgraph", "Ancestor Subgraph")
+      )
+    })
+  })
+  
+  #######################################
+  ####### Node to node subgraph #########
+  #######################################
+  
+  observeEvent(input$menu_node_to_node, {
+    output$file_parsed_ui <- renderUI({
+      tagList(
+        selectInput("node_to_node_start_node", "Start Node:", global_data()$concepts),
+        selectInput("node_to_node_end_node", "End Node:", global_data()$concepts),
+        radioButtons("node_to_node_community_detection", "Community Detection Method:", 
+                     c("Node Community Detection" = "node", 
+                       "Edge Community Detection" = "edge",
+                       "No Community Detection" = "none"),
+                     selected = "none")
+      )
+    })
+  })
+  
+  subgraph <- reactive({
+    req(input$node_to_node_start_node, input$node_to_node_end_node, input$node_to_node_community_detection)
+    
+    get_node_to_node_subgraph(input$node_to_node_start_node, input$node_to_node_end_node, 
+                                                        global_data()$graph, input$node_to_node_community_detection)
+  })
+  
+  observe({
+    req(subgraph())
+    
+    num_communities <- length(subgraph())
+    
+    community_options <- "Entire Graph"
+    if (input$node_to_node_community_detection != "none") {
+      community_options <- c(community_options, paste("Community", 1:length(subgraph)))
+    }
+   
+#    insertUI(
+#      selector = "#file_parsed_ui",
+#      where = "afterEnd",
+#      ui = tags$div(
+#        id = 'my_dynamic_UI',
+#        radioButtons("select_node_to_node_communities", "Show:", community_options, selected = "Entire Graph"),
+#      )
+#    )
+    
+    output$file_download_ui <- renderUI({
+      tagList(
+        downloadButton("download_graph", "Download Graph as Image"),
+        radioButtons("select_node_to_node_communities", "Show:", community_options, selected = "Entire Graph"),
+      )
+    })
+    
+    story_graph <- subgraph()
+    print("input$select_node_to_node_communities")
+    print(input$select_node_to_node_communities)
+          
+    if (is.null(input$select_node_to_node_communities)) {
+      plotted_graph <<- story_graph
+    } else {
+      if (input$select_node_to_node_communities == "Entire Graph" | input$node_to_node_community_detection == "none") {
+        plotted_graph <<- story_graph
+      } else {
+        community_number <- as.integer(substr(input$select_node_to_node_communities,11,str_length(input$select_node_to_node_communities)))
+        print(paste("community_number"), community_number)
+        
+        if (input$node_to_node_community_detection == "edge") {
+          sub_stories_by_edge_community <- subgraphs_by_edge_community(story_graph)
+          print("sub_stories_by_edge_community")
+          print(sub_stories_by_edge_community)
+          plotted_graph <<- sub_stories_by_edge_community[[community_number]]
+        }
+        if (input$node_to_node_community_detection == "node") {
+          sub_stories_by_node_community <- subgraphs_by_node_community(story_graph)
+          sub_stories_by_node_community <- get_wider_sub_stories(sub_stories_by_node_community, story_graph,
+                                                                 get_from = FALSE, get_to = FALSE) 
+          plotted_graph <<- sub_stories_by_node_community[[community_number]]
+        }
+      }
+    }
+
+    if(length(E(story_graph) > 0)) {  # need to adjust
+      output[["grviz"]] <- renderGrViz({
+        # Generate grViz graph
+        viz_text <- generate_grViz_graph(
+          plotted_graph,
+          input$scale * input$aspect_ratio_across,
+          input$scale * 1,
+          "LR",
+          show_uncertainty = FALSE,
+          show_edge_community = FALSE,
+          show_node_community = FALSE,
+          layout = input$layout_algorithm
+        )
+        plotted_grViz <<- grViz(viz_text)
+      })
+    }
+    
+  })
+  
+  
+  #######################################
+  ########## Ancestor subgraph ##########
+  #######################################
+  
+  observeEvent(input$menu_ancestor_subgraph, {
+    output$file_parsed_ui <- renderUI({
+      tagList(
+        selectInput("ancestor_node", "Ancestor Node:", global_data()$concepts),
+        numericInput("steps_back", "Steps back:", min = 1, max = 10, value = 1),
+        radioButtons("community_detection", "Community Detection Method:", 
+                     c("Node Community Detection" = "node", 
+                       "Edge Community Detection" = "edge",
+                       "No Community Detection" = "none"),
+                     selected = "none")
+      )
+    })
+  })
+  
+  observeEvent(c(input$back_main_menu, input$file), {
+    output$file_parsed_ui <- renderUI({
+      tagList(
+        actionButton("menu_node_to_node", "Node to Node"),
+        actionButton("menu_ancestor_subgraph", "Ancestor Subgraph")
+      )
+    })
+    
+    output$file_download_ui <- renderUI({
+      tagList(
+      )
+    })
+  })
+  
+  
+  
+  
+  
+  ############################################################
+  
+  output$download_graph <- downloadHandler(
+    filename = function() {
+      paste(sub("\\.[^.]*$", "", input$file$name), ".png", sep="")
+    },
+    content = function(file) {i
+      # Render grViz graph to png file
+      plotted_grViz %>% export_svg %>% charToRaw %>% rsvg_png(file, input$resolution, round(input$resolution / input$aspect_ratio_across,0))
+    }
+  )
+  
+  observeEvent(input$show_metrics, {
+    # Calculate metrics
+    btwn <- betweenness(global_data()$graph)
+    metrics <- cbind.data.frame(concept = names(btwn), betweenness = as.vector(btwn))
+    metrics <- metrics %>% arrange(desc(betweenness))
+    top_metrics <- metrics[1:10,]
+    
+    # Show modal with metrics
+    showModal(modalDialog(
+      title = "Top 10 Nodes by Betweenness",
+      renderTable(top_metrics)
+    ))
+  })
+  
+}
+
+# Create Shiny app ----
+shinyApp(ui, server)
